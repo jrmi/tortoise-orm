@@ -42,6 +42,8 @@ class AsyncpgDBClient(BaseDBAsyncClient):
         self.host = host
         self.port = int(port)  # make sure port is int type
 
+        self.dsn = ''
+
         # self._db_pool = None  # Type: Optional[asyncpg.pool.Pool]
         self._connection = None  # Type: Optional[asyncpg.Connection]
 
@@ -50,7 +52,7 @@ class AsyncpgDBClient(BaseDBAsyncClient):
         )
 
     async def create_connection(self, with_db: bool) -> None:
-        dsn = self.DSN_TEMPLATE.format(
+        self.dsn = self.DSN_TEMPLATE.format(
             user=self.user,
             password=self.password,
             host=self.host,
@@ -58,23 +60,17 @@ class AsyncpgDBClient(BaseDBAsyncClient):
             database=self.database if with_db else ''
         )
         try:
-            self._connection = await asyncpg.connect(dsn)
-            self.log.debug(
-                'Created connection %s with params: user=%s database=%s host=%s port=%s',
-                self._connection, self.user, self.database, self.host, self.port
-            )
+            self._connection = await asyncpg.connect(self.dsn)
+            self.log.debug('Created connection %s with params: %s', self._connection, self.dsn)
         except asyncpg.InvalidCatalogNameError:
             raise DBConnectionError("Can't establish connection to database {}".format(
                 self.database
             ))
 
     async def close(self) -> None:
-        if self._connection:
+        if self._connection:  # pragma: nobranch
             await self._connection.close()
-            self.log.debug(
-                'Closed connection %s with params: user=%s database=%s host=%s port=%s',
-                self._connection, self.user, self.database, self.host, self.port
-            )
+            self.log.debug('Closed connection %s with params: %s', self._connection, self.dsn)
             self._connection = None
 
     async def db_create(self) -> None:

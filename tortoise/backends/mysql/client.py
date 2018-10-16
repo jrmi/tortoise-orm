@@ -43,6 +43,8 @@ class MySQLClient(BaseDBAsyncClient):
         self.host = host
         self.port = int(port)  # make sure port is int type
 
+        self.template = {}  # type: dict
+
         # self._db_pool = None  # Type: Optional[aiomysql.Pool]
         self._connection = None  # Type: Optional[aiomysql.Connection]
 
@@ -51,35 +53,24 @@ class MySQLClient(BaseDBAsyncClient):
         )
 
     async def create_connection(self, with_db: bool) -> None:
-        template = {
+        self.template = {
             'host': self.host,
             'port': self.port,
             'user': self.user,
             'password': self.password,
             'db': self.database if with_db else None
         }
-
         try:
-            self._connection = await aiomysql.connect(**template)
-            self.log.debug(
-                'Created connection %s with params: user=%s database=%s host=%s port=%s',
-                self._connection, self.user, self.database, self.host, self.port
-            )
-        except pymysql.err.OperationalError:
-            raise DBConnectionError(
-                "Can't connect to MySQL server: "
-                'user={user} database={database} host={host} port={port}'.format(
-                    user=self.user, database=self.database, host=self.host, port=self.port
-                )
-            )
+            self._connection = await aiomysql.connect(**self.template)
+            self.log.debug('Created connection %s with params: %s', self._connection, self.template)
+        except pymysql.err.OperationalError as e:
+            raise DBConnectionError("{} ({}): {}".format(e.args[1], e.args[0], self.template))
 
     async def close(self) -> None:
-        if self._connection:
+        if self._connection:  # pragma: nobranch
             self._connection.close()
-            self.log.debug(
-                'Closed connection %s with params: user=%s database=%s host=%s port=%s',
-                self._connection, self.user, self.database, self.host, self.port
-            )
+            await self._connection.ensure_closed()
+            self.log.debug('Closed connection %s with params: %s', self._connection, self.template)
             self._connection = None
 
     async def db_create(self) -> None:

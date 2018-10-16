@@ -1,20 +1,19 @@
 import asyncio as _asyncio
 import os as _os
-from copy import deepcopy
 from typing import List
 from unittest import SkipTest, expectedFailure, skip, skipIf, skipUnless  # noqa
 
 from asynctest import TestCase as _TestCase
 from asynctest import _fail_on
 
-from tortoise import Tortoise
+from tortoise import ContextVar, Tortoise
 from tortoise.backends.base.config_generator import generate_config as _generate_config
 from tortoise.exceptions import DBConnectionError
-from tortoise.transactions import start_transaction
+from tortoise.transactions import current_transaction_map, start_transaction
 
 __all__ = ('SimpleTestCase', 'IsolatedTestCase', 'TestCase', 'SkipTest', 'expectedFailure',
            'skip', 'skipIf', 'skipUnless', 'initializer', 'finalizer')
-_TORTOISE_TEST_DB = _os.environ.get('TORTOISE_TEST_DB', 'sqlite:///tmp/test-{}.sqlite')
+_TORTOISE_TEST_DB = _os.environ.get('TORTOISE_TEST_DB', 'sqlite://:memory:')
 
 expectedFailure.__doc__ = """
 Mark test as expecting failiure.
@@ -23,8 +22,8 @@ On success it will be marked as unexpected success.
 """
 
 _CONFIG = {}  # type: dict
-_APPS = {}  # type: dict
 _CONNECTIONS = {}  # type: dict
+_SELECTOR = None  # type: ignore
 
 
 def getDBConfig(app_label: str, modules: List[str]) -> dict:
@@ -58,27 +57,34 @@ def initializer():
     """
     # pylint: disable=W0603
     global _CONFIG
-    global _APPS
     global _CONNECTIONS
+    global _SELECTOR
     _CONFIG = getDBConfig(
         app_label='models',
         modules=['tortoise.tests.testmodels'],
     )
 
     loop = _asyncio.get_event_loop()
+    _SELECTOR = loop._selector
     loop.run_until_complete(_init_db(_CONFIG))
-    _APPS = deepcopy(Tortoise.apps)
     _CONNECTIONS = Tortoise._connections.copy()
-    loop.run_until_complete(Tortoise._reset_connections())
+    Tortoise.apps = {}
+    Tortoise._connections = {}
+    Tortoise._inited = False
 
 
 def finalizer():
     """
     Cleans up the DB after testing. Must be called as part of the test environment teardown.
     """
-    Tortoise.apps = deepcopy(_APPS)
+    Tortoise.apps = {}
     Tortoise._connections = _CONNECTIONS.copy()
+    for name in Tortoise._connections.keys():
+        current_transaction_map[name] = ContextVar(name, default=None)
+    Tortoise._init_apps(_CONFIG['apps'])
+    Tortoise._inited = True
     loop = _asyncio.get_event_loop()
+    loop._selector = _SELECTOR
     loop.run_until_complete(Tortoise._drop_databases())
 
 
@@ -92,6 +98,7 @@ class SimpleTestCase(_TestCase):
 
     Based on `asynctest <http://asynctest.readthedocs.io/>`_
     """
+    use_default_loop = True
 
     async def _setUpDB(self):
         pass
@@ -118,11 +125,15 @@ class SimpleTestCase(_TestCase):
         self.loop._asynctest_ran = False
 
     def _tearDown(self) -> None:
-        self.loop.run_until_complete(self._tearDownDB())
         if _asyncio.iscoroutinefunction(self.tearDown):
             self.loop.run_until_complete(self.tearDown())
         else:
             self.tearDown()
+        self.loop.run_until_complete(self._tearDownDB())
+        Tortoise.apps = {}
+        Tortoise._connections = {}
+        Tortoise._inited = False
+        current_transaction_map.clear()
 
         # post-test checks
         self._checker.check_test(self)
@@ -160,13 +171,14 @@ class TestCase(SimpleTestCase):
     """
 
     async def _setUpDB(self):
-        Tortoise.apps = deepcopy(_APPS)
+        Tortoise.apps = {}
         Tortoise._connections = _CONNECTIONS.copy()
-        await Tortoise.init(_CONFIG)
+        for name in Tortoise._connections.keys():
+            current_transaction_map[name] = ContextVar(name, default=None)
+        Tortoise._init_apps(_CONFIG['apps'])
+        Tortoise._inited = True
 
         self.transaction = await start_transaction()  # pylint: disable=W0201
 
     async def _tearDownDB(self) -> None:
         await self.transaction.rollback()
-        # Have to reset connections because tests are run in different loops
-        await Tortoise._reset_connections()
