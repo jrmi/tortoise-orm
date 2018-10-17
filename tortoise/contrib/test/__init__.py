@@ -51,6 +51,15 @@ async def _init_db(config):
     await Tortoise.generate_schemas()
 
 
+def restore_default():
+    Tortoise.apps = {}
+    Tortoise._connections = _CONNECTIONS.copy()
+    for name in Tortoise._connections.keys():
+        current_transaction_map[name] = ContextVar(name, default=None)
+    Tortoise._init_apps(_CONFIG['apps'])
+    Tortoise._inited = True
+
+
 def initializer():
     """
     Sets up the DB for testing. Must be called as part of test environment setup.
@@ -77,12 +86,7 @@ def finalizer():
     """
     Cleans up the DB after testing. Must be called as part of the test environment teardown.
     """
-    Tortoise.apps = {}
-    Tortoise._connections = _CONNECTIONS.copy()
-    for name in Tortoise._connections.keys():
-        current_transaction_map[name] = ContextVar(name, default=None)
-    Tortoise._init_apps(_CONFIG['apps'])
-    Tortoise._inited = True
+    restore_default()
     loop = _asyncio.get_event_loop()
     loop._selector = _SELECTOR
     loop.run_until_complete(Tortoise._drop_databases())
@@ -159,8 +163,12 @@ class IsolatedTestCase(SimpleTestCase):
         )
         await Tortoise.init(config, _create_db=True)
         await Tortoise.generate_schemas()
+        self._connections = Tortoise._connections.copy()
 
     async def _tearDownDB(self) -> None:
+        Tortoise._connections = self._connections.copy()
+        for name in Tortoise._connections.keys():
+            current_transaction_map[name] = ContextVar(name, default=None)
         await Tortoise._drop_databases()
 
 
@@ -171,14 +179,9 @@ class TestCase(SimpleTestCase):
     """
 
     async def _setUpDB(self):
-        Tortoise.apps = {}
-        Tortoise._connections = _CONNECTIONS.copy()
-        for name in Tortoise._connections.keys():
-            current_transaction_map[name] = ContextVar(name, default=None)
-        Tortoise._init_apps(_CONFIG['apps'])
-        Tortoise._inited = True
-
+        restore_default()
         self.transaction = await start_transaction()  # pylint: disable=W0201
 
     async def _tearDownDB(self) -> None:
+        restore_default()
         await self.transaction.rollback()

@@ -22,12 +22,8 @@ class TestInitErrors(test.SimpleTestCase):
         )
 
     async def tearDown(self):
-        try:
-            Tortoise.apps = {}
-            Tortoise._connections = {}
-            Tortoise._inited = False
-        except ConfigurationError:
-            pass
+        await Tortoise.close_connections()
+        await Tortoise._reset_apps()
 
     async def test_basic_init(self):
         await Tortoise.init({
