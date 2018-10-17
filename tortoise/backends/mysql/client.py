@@ -6,7 +6,8 @@ import aiomysql
 import pymysql
 from pypika import MySQLQuery
 
-from tortoise.backends.base.client import BaseDBAsyncClient, ConnectionWrapper
+from tortoise.backends.base.client import (BaseDBAsyncClient, BaseTransactionWrapper,
+                                           ConnectionWrapper)
 from tortoise.backends.mysql.executor import MySQLExecutor
 from tortoise.backends.mysql.schema_generator import MySQLSchemaGenerator
 from tortoise.exceptions import (DBConnectionError, IntegrityError, OperationalError,
@@ -119,7 +120,7 @@ class MySQLClient(BaseDBAsyncClient):
                 await cursor.execute(query)
 
 
-class TransactionWrapper(MySQLClient):
+class TransactionWrapper(MySQLClient, BaseTransactionWrapper):
     def __init__(self, connection_name, connection):
         self.connection_name = connection_name
         self._connection = connection
@@ -147,13 +148,3 @@ class TransactionWrapper(MySQLClient):
         self._finalized = True
         await self._connection.rollback()
         current_transaction_map[self.connection_name].set(self._old_context_value)
-
-    async def __aenter__(self):
-        await self.start()
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if exc_type:
-            await self.rollback()
-        else:
-            await self.commit()
